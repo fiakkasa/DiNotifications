@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="DiNotifications.Tests/DiNotifications.Tests.csproj" />
+  <Project Path="DiNotifications/DiNotifications.csproj" />
+</Solution>
