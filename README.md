@@ -8,7 +8,8 @@ Simple example of handling messages based on volume received!
   ```json
   {
     "NotificationsConfig": {
-      "Window": "00:00:01"
+      "Window": "00:00:05",
+      "BatchedItemsSeparator": "---"
     },
     "Logging": {
       "LogLevel": {
