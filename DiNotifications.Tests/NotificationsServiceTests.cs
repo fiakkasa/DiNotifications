@@ -1,6 +1,8 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿using System.Reactive.Subjects;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using OneOf;
 
 namespace DiNotifications.Tests;
 
@@ -12,10 +14,16 @@ public class NotificationsServiceTests
     private readonly IHostApplicationLifetime _hostApplicationLifetime = Substitute.For<IHostApplicationLifetime>();
     private readonly ILogger<NotificationsService> _logger = Substitute.For<ILogger<NotificationsService>>();
 
+    private readonly NotificationsConfig _defaultConfig = new()
+    {
+        Window = TimeSpan.FromMilliseconds(1000),
+        MaxNonBatchedCalls = 1,
+        BatchedItemsSeparator = "---"
+    };
+
     public NotificationsServiceTests()
     {
-        _optionsMonitor.CurrentValue.Returns(new NotificationsConfig { Window = TimeSpan.FromMilliseconds(1000) });
-
+        _optionsMonitor.CurrentValue.Returns(_defaultConfig);
         _notificationsService = new NotificationsService(
             _optionsMonitor,
             _senderService,
@@ -67,7 +75,7 @@ public class NotificationsServiceTests
     }
 
     [Fact]
-    public async Task Send_Should_Send_Single_Schedule_Single_Message_Batch_And_Abort_On_Sending_Batch_On_ApplicationStopping()
+    public async Task Send_Should_Send_Single_Message_Schedule_Single_Message_Batch_And_Abort_Sending_Batch_On_ApplicationStopping()
     {
         using var cts = new CancellationTokenSource();
         _hostApplicationLifetime.ApplicationStopping.Returns(cts.Token);
@@ -86,14 +94,7 @@ public class NotificationsServiceTests
 
         Assert.Single(receivedCallsBefore);
         Assert.Single(receivedCallsAfter);
-        Assert.All(
-            results,
-            x =>
-            {
-                Assert.True(x.IsT0);
-                Assert.True(x.AsT0);
-            }
-        );
+        Assert.All(results, x => Assert.True(x.IsT0 && x.AsT0));
         _logger.Received(1).Log(
             LogLevel.Error,
             Arg.Any<EventId>(),
@@ -104,7 +105,7 @@ public class NotificationsServiceTests
     }
 
     [Fact]
-    public async Task Send_Should_Send_Single_Schedule_Multi_Message_Batch_And_Abort_On_Sending_Batch_On_ApplicationStopping()
+    public async Task Send_Should_Send_Single_Message_Schedule_Multi_Message_Batch_And_Abort_Sending_Batch_On_ApplicationStopping()
     {
         using var cts = new CancellationTokenSource();
         _hostApplicationLifetime.ApplicationStopping.Returns(cts.Token);
@@ -123,14 +124,7 @@ public class NotificationsServiceTests
 
         Assert.Single(receivedCallsBefore);
         Assert.Single(receivedCallsAfter);
-        Assert.All(
-            results,
-            x =>
-            {
-                Assert.True(x.IsT0);
-                Assert.True(x.AsT0);
-            }
-        );
+        Assert.All(results, x => Assert.True(x.IsT0 && x.AsT0));
         _logger.Received(1).Log(
             LogLevel.Error,
             Arg.Any<EventId>(),
@@ -140,56 +134,70 @@ public class NotificationsServiceTests
         );
     }
 
-    [Fact]
-    public async Task Send_Should_Send_Single_Message_Within_Window()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    [InlineData(9)]
+    public async Task Send_Should_Send_Single_Message_Within_Window(int factor)
     {
-        var messages = new[]
-        {
-            "Hello",
-            "World",
-            "Test"
-        };
+        var messages =
+            Enumerable.Range(0, factor)
+                .Select((x, i) => $"{i}_Hello")
+                .ToArray();
+
+        var results = new List<OneOf<bool, Exception>>();
 
         foreach (var message in messages)
         {
-            await _notificationsService.Send("subject", message);
+            results.Add(await _notificationsService.Send("subject", message));
             await Task.Delay(TimeSpan.FromMilliseconds(1100));
         }
 
-        var receivedMessages =
+        var receivedMessagesBody =
             _senderService
                 .ReceivedCalls()
                 .Select(x => x.GetArguments()[2]?.ToString())
                 .ToArray();
 
-        Assert.Equal(3, receivedMessages.Length);
+        Assert.All(results, x => Assert.True(x.IsT0 && x.AsT0));
+        Assert.Equal(messages.Length, receivedMessagesBody.Length);
         Assert.All(
             messages,
-            (expectedMessage, index) => Assert.Equal(expectedMessage, receivedMessages[index])
+            (expectedMessage, index) => 
+                Assert.Equal(expectedMessage, receivedMessagesBody[index])
         );
     }
 
-    [Fact]
-    public async Task Send_Should_Send_Single_And_Batched_Message_Combinations_Within_Window()
+    [Theory]
+    [InlineData(2)]
+    [InlineData(4)]
+    [InlineData(8)]
+    public async Task Send_Should_Send_Single_Message_And_Batched_Message_Combinations_Within_Window(int factor)
     {
         var messages = new[]
         {
+            // single
             "Hello",
+            // batched
             "World"
         };
         var additionalMessage = "Test";
+        var results = new List<OneOf<bool, Exception>>();
 
-        for (var i = 0; i < 4; i++)
+        for (var i = 0; i < factor; i++)
         {
-            foreach (var message in messages)
-            {
-                await _notificationsService.Send("subject", message);
-            }
+            var requests = new List<Task<OneOf<bool, Exception>>>(
+                messages.Select(message =>
+                    _notificationsService.Send("subject", message)
+                )
+            );
 
             if (i >= 2)
             {
-                await _notificationsService.Send("subject", additionalMessage);
+                requests.Add(_notificationsService.Send("subject", additionalMessage));
             }
+
+            results.AddRange(await Task.WhenAll(requests));
 
             await Task.Delay(TimeSpan.FromMilliseconds(1100));
         }
@@ -198,7 +206,7 @@ public class NotificationsServiceTests
             _senderService.ReceivedCalls()
                 .Select(x => x.GetArguments())
                 .ToArray();
-        var receivedInitialMessages =
+        var receivedInitialMessagesBody =
             receivedArguments
                 .Select((item, index) => (item, index))
                 .Where(z => z.index % 2 == 0)
@@ -215,10 +223,11 @@ public class NotificationsServiceTests
                 })
                 .ToArray();
 
-        // 4 x single initial + 4 x batched
-        Assert.Equal(4 + 4, receivedArguments.Length);
+        Assert.All(results, x => Assert.True(x.IsT0 && x.AsT0));
+        // factor x single initial + factor x batched
+        Assert.Equal(factor + factor, receivedArguments.Length);
         Assert.All(
-            receivedInitialMessages,
+            receivedInitialMessagesBody,
             value => Assert.Equal(messages[0], value)
         );
         Assert.All(
@@ -234,10 +243,77 @@ public class NotificationsServiceTests
             value =>
             {
                 Assert.Equal("2 Notifications Received", value.Subject);
-                Assert.Contains(messages[1], value.Body);
-                Assert.Contains(additionalMessage, value.Body);
-                Assert.Contains("---", value.Body);
+                var batchedText = value.Body?.Split(_defaultConfig.BatchedItemsSeparator) ?? [];
+                Assert.Equal(2, batchedText.Length);
+                Assert.Contains(messages[1], batchedText[0]);
+                Assert.Contains(additionalMessage, batchedText[1]);
             }
+        );
+    }
+
+    [Fact]
+    public async Task Send_Should_Send_Multiple_Single_Messages_And_Batched_Message_Combinations_Within_Window()
+    {
+        _optionsMonitor.CurrentValue.Returns(
+            _defaultConfig with { MaxNonBatchedCalls = 3 }
+        );
+        var notificationsService = new NotificationsService(
+            _optionsMonitor,
+            _senderService,
+            _hostApplicationLifetime,
+            _logger
+        );
+
+        var messages = new[]
+        {
+            // single
+            "1_Hello",
+            "2_World",
+            "3_Test",
+            // batched
+            "4_Hello",
+            "5_World",
+            "6_Test",
+            "7_Hello",
+            "8_World",
+            "9_Test"
+        };
+
+        var results = await Task.WhenAll(
+            messages.Select(message => notificationsService.Send("subject", message))
+        );
+        await Task.Delay(TimeSpan.FromMilliseconds(1100));
+
+        var receivedMessages =
+            _senderService
+                .ReceivedCalls()
+                .Select(x =>
+                {
+                    var arguments = x.GetArguments();
+
+                    return new
+                    {
+                        Subject = arguments[1]?.ToString(),
+                        Body = arguments[2]?.ToString()
+                    };
+                })
+                .ToArray();
+
+        Assert.All(results, x => Assert.True(x.IsT0 && x.AsT0));
+        // 3 single + 1 batched
+        Assert.Equal(4, receivedMessages.Length);
+        Assert.All(
+            receivedMessages.Take(3).Select((message, index) => (message, index)),
+            item => Assert.Equal(messages[item.index], item.message.Body)
+        );
+
+        var batched = receivedMessages[3];
+        Assert.Equal("6 Notifications Received", batched.Subject);
+        var batchedText = batched.Body?.Split(_defaultConfig.BatchedItemsSeparator) ?? [];
+        Assert.Equal(6, batchedText.Length); // 6 messages
+        Assert.All(
+            messages.Skip(3),
+            message => Assert.Contains(message, batched.Body)
         );
     }
 

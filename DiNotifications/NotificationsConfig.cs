@@ -9,6 +9,9 @@ public record NotificationsConfig : IValidatableObject
 
     public TimeSpan Window { get; init; } = TimeSpan.FromMilliseconds(500);
 
+    [Range(1, 256)]
+    public int MaxNonBatchedCalls { get; init; } = 1;
+
     [StringLength(256)]
     public string BatchedItemsSeparator { get; init; } = string.Empty;
 

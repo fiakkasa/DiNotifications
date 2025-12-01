@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text;
-
 using Microsoft.Extensions.Options;
 
 namespace DiNotifications;
@@ -13,6 +12,7 @@ public sealed class NotificationsService : INotificationsService
     private readonly ISenderService _sender;
     private readonly ConcurrentQueue<DateTimeOffset> _rollingCallsQueue = new();
     private readonly Subject<Notification> _rxSubject = new();
+    private readonly int _maxNonBatchedCalls;
     private readonly double _windowMilliseconds;
     private readonly IDisposable _rxSubscription;
 
@@ -29,6 +29,7 @@ public sealed class NotificationsService : INotificationsService
         _sender = sender;
         var config = options.CurrentValue;
 
+        _maxNonBatchedCalls = config.MaxNonBatchedCalls;
         _windowMilliseconds = config.Window.TotalMilliseconds;
         _rxSubscription =
             _rxSubject
@@ -100,7 +101,7 @@ public sealed class NotificationsService : INotificationsService
             _rollingCallsQueue.TryDequeue(out _);
         }
 
-        return _rollingCallsQueue.Count == 1;
+        return _rollingCallsQueue.Count <= _maxNonBatchedCalls;
     }
 
     private async Task BatchSend(
@@ -115,6 +116,7 @@ public sealed class NotificationsService : INotificationsService
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var (timestamp, subject, body) = list[0];
+
                 await _sender.Send(
                     timestamp,
                     subject,
