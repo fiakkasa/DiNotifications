@@ -12,8 +12,7 @@ public sealed class NotificationsService : INotificationsService
     private readonly ISenderService _sender;
     private readonly ConcurrentQueue<DateTimeOffset> _rollingCallsQueue = new();
     private readonly Subject<Notification> _rxSubject = new();
-    private readonly int _maxNonBatchedCalls;
-    private readonly double _windowMilliseconds;
+    private readonly NotificationsConfig _config;
     private readonly IDisposable _rxSubscription;
 
     private bool _disposedValue;
@@ -27,13 +26,11 @@ public sealed class NotificationsService : INotificationsService
     {
         _logger = logger;
         _sender = sender;
-        var config = options.CurrentValue;
+        _config = options.CurrentValue;
 
-        _maxNonBatchedCalls = config.MaxNonBatchedCalls;
-        _windowMilliseconds = config.Window.TotalMilliseconds;
         _rxSubscription =
             _rxSubject
-                .Window(config.Window)
+                .Window(_config.Window)
                 .SelectMany(window => window.ToList())
                 .Where(list => list.Count > 0)
                 .Subscribe(async list =>
@@ -49,7 +46,7 @@ public sealed class NotificationsService : INotificationsService
     {
         try
         {
-            if(_disposedValue)
+            if (_disposedValue)
             {
                 _logger.LogWarning("Operation cannot commence as the service is disposed.");
                 return false;
@@ -59,9 +56,7 @@ public sealed class NotificationsService : INotificationsService
 
             if (ShouldSendImmediate(now, cancellationToken))
             {
-                await _sender.Send(now, subject, body, cancellationToken);
-
-                return true;
+                return await _sender.Send(now, subject, body, cancellationToken);
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -93,7 +88,7 @@ public sealed class NotificationsService : INotificationsService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if ((now - timestamp).TotalMilliseconds <= _windowMilliseconds)
+            if ((now - timestamp).TotalMilliseconds <= _config.Window.TotalMilliseconds)
             {
                 break;
             }
@@ -101,7 +96,7 @@ public sealed class NotificationsService : INotificationsService
             _rollingCallsQueue.TryDequeue(out _);
         }
 
-        return _rollingCallsQueue.Count <= _maxNonBatchedCalls;
+        return _rollingCallsQueue.Count <= _config.MaxNonBatchedCalls;
     }
 
     private async Task BatchSend(
@@ -111,11 +106,11 @@ public sealed class NotificationsService : INotificationsService
     {
         try
         {
-            if (list.Count == 1)
+            if (list is [Notification item])
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var (timestamp, subject, body) = list[0];
+                var (timestamp, subject, body) = item;
 
                 await _sender.Send(
                     timestamp,
@@ -127,7 +122,6 @@ public sealed class NotificationsService : INotificationsService
                 return;
             }
 
-            var firstTimestamp = list[0].Timestamp;
             var batchSubject = $"{list.Count} Notifications Received";
             var sb = new StringBuilder();
 
@@ -137,7 +131,7 @@ public sealed class NotificationsService : INotificationsService
 
                 if (sb.Length > 0)
                 {
-                    sb.AppendLine("---");
+                    sb.AppendLine(_config.BatchedItemsSeparator);
                 }
 
                 sb
@@ -146,7 +140,7 @@ public sealed class NotificationsService : INotificationsService
             }
 
             await _sender.Send(
-                firstTimestamp,
+                list[0].Timestamp,
                 batchSubject,
                 sb.ToString(),
                 cancellationToken

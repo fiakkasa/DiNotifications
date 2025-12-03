@@ -3,7 +3,12 @@ namespace DiNotifications;
 [ExcludeFromCodeCoverage]
 public sealed class SenderService : ISenderService
 {
-    public Task Send(DateTimeOffset timestamp, string subject, string body, CancellationToken cancellationToken = default)
+    public async Task<OneOf<bool, Exception>> Send(
+        DateTimeOffset timestamp, 
+        string subject,
+        string body,
+        CancellationToken cancellationToken = default
+    )
     {
         Console.WriteLine(
 $"""
@@ -13,6 +18,6 @@ $"""
 
 """);
 
-        return Task.CompletedTask;
+        return await Task.FromResult(true);
     }
 }

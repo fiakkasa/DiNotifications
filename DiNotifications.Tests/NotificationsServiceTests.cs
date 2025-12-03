@@ -1,5 +1,4 @@
-﻿using System.Reactive.Subjects;
-using Microsoft.Extensions.Hosting;
+﻿using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OneOf;
@@ -16,7 +15,7 @@ public class NotificationsServiceTests
 
     private readonly NotificationsConfig _defaultConfig = new()
     {
-        Window = TimeSpan.FromMilliseconds(1000),
+        Window = TimeSpan.FromMilliseconds(500),
         MaxNonBatchedCalls = 1,
         BatchedItemsSeparator = "---"
     };
@@ -24,6 +23,12 @@ public class NotificationsServiceTests
     public NotificationsServiceTests()
     {
         _optionsMonitor.CurrentValue.Returns(_defaultConfig);
+        _senderService.Send(
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<string>(),
+            Arg.Any<string>(),
+            Arg.Any<CancellationToken>()
+        ).Returns(true);
         _notificationsService = new NotificationsService(
             _optionsMonitor,
             _senderService,
@@ -36,7 +41,7 @@ public class NotificationsServiceTests
     public async Task Send_Should_Abort_When_Cancellation_Requested_On_Single()
     {
         using var cts = new CancellationTokenSource();
-        cts.Cancel();
+        await cts.CancelAsync();
 
         var result = await _notificationsService.Send("subject", "message", cts.Token);
 
@@ -57,11 +62,11 @@ public class NotificationsServiceTests
         await _notificationsService.Send("subject", "message");
 
         using var cts = new CancellationTokenSource();
-        cts.Cancel();
+        await cts.CancelAsync();
 
         var result = await _notificationsService.Send("subject", "message", cts.Token);
 
-        await Task.Delay(1100);
+        await Task.Delay(600);
 
         Assert.True(result.IsT1);
         Assert.IsType<OperationCanceledException>(result.AsT1);
@@ -84,11 +89,11 @@ public class NotificationsServiceTests
             Enumerable.Range(0, 2).Select(x => _notificationsService.Send("subject", "message"))
         );
 
-        cts.Cancel();
+        await cts.CancelAsync();
 
         var receivedCallsBefore = _senderService.ReceivedCalls().ToArray();
 
-        await Task.Delay(1100);
+        await Task.Delay(600);
 
         var receivedCallsAfter = _senderService.ReceivedCalls().ToArray();
 
@@ -114,11 +119,11 @@ public class NotificationsServiceTests
             Enumerable.Range(0, 5).Select(x => _notificationsService.Send("subject", "message"))
         );
 
-        cts.Cancel();
+        await cts.CancelAsync();
 
         var receivedCallsBefore = _senderService.ReceivedCalls().ToArray();
 
-        await Task.Delay(1100);
+        await Task.Delay(600);
 
         var receivedCallsAfter = _senderService.ReceivedCalls().ToArray();
 
@@ -150,7 +155,7 @@ public class NotificationsServiceTests
         foreach (var message in messages)
         {
             results.Add(await _notificationsService.Send("subject", message));
-            await Task.Delay(TimeSpan.FromMilliseconds(1100));
+            await Task.Delay(TimeSpan.FromMilliseconds(600));
         }
 
         var receivedMessagesBody =
@@ -199,7 +204,7 @@ public class NotificationsServiceTests
 
             results.AddRange(await Task.WhenAll(requests));
 
-            await Task.Delay(TimeSpan.FromMilliseconds(1100));
+            await Task.Delay(TimeSpan.FromMilliseconds(600));
         }
 
         var receivedArguments =
@@ -282,7 +287,7 @@ public class NotificationsServiceTests
         var results = await Task.WhenAll(
             messages.Select(message => notificationsService.Send("subject", message))
         );
-        await Task.Delay(TimeSpan.FromMilliseconds(1100));
+        await Task.Delay(TimeSpan.FromMilliseconds(600));
 
         var receivedMessages =
             _senderService
