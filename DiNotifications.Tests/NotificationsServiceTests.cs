@@ -15,9 +15,11 @@ public class NotificationsServiceTests
 
     private readonly NotificationsConfig _defaultConfig = new()
     {
-        Window = TimeSpan.FromMilliseconds(500),
-        MaxNonBatchedCalls = 1,
-        BatchedItemsSeparator = "---"
+        ImmediateCallsThresholdWindow = TimeSpan.FromMilliseconds(500),
+        BatchedCallsRetentionPeriod = TimeSpan.FromMilliseconds(500),
+        MaxImmediateCalls = 1,
+        BatchedItemsSeparator = "---",
+        MaxBatchedItems = 100
     };
 
     public NotificationsServiceTests()
@@ -168,8 +170,50 @@ public class NotificationsServiceTests
         Assert.Equal(messages.Length, receivedMessagesBody.Length);
         Assert.All(
             messages,
-            (expectedMessage, index) => 
+            (expectedMessage, index) =>
                 Assert.Equal(expectedMessage, receivedMessagesBody[index])
+        );
+    }
+
+    [Fact]
+    public async Task Send_Should_Process_A_Limited_Amount_Of_Messages_Based_On_Configuration()
+    {
+        var messages =
+            Enumerable.Range(0, 201)
+                .Select((x, i) => $"{i}_Hello")
+                .ToArray();
+
+        var results = await Task.WhenAll(
+            messages.Select(message => _notificationsService.Send("subject", message))
+        );
+
+        await Task.Delay(TimeSpan.FromMilliseconds(600));
+
+        var receivedMessagesBody =
+            _senderService
+                .ReceivedCalls()
+                .Select(x => x.GetArguments()[2]?.ToString())
+                .ToArray();
+
+        Assert.All(results, x => Assert.True(x.IsT0 && x.AsT0));
+        _logger.Received(1).Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Is<object>(x => x.ToString() == $"Only {_defaultConfig.MaxBatchedItems} out of {messages.Length - 1} will be processed."),
+            null,
+            Arg.Any<Func<object, Exception?, string>>()
+        );
+        Assert.Equal(2, receivedMessagesBody.Length);
+        var batchedText = receivedMessagesBody[1]?.Split(_defaultConfig.BatchedItemsSeparator) ?? [];
+        Assert.Contains("Note: Only ", batchedText[^1]);
+        Assert.Contains("Check the logs for more details.", batchedText[^1]);
+        // skip last element: note
+        Assert.Equal(_defaultConfig.MaxBatchedItems, batchedText.Length -1);
+        Assert.All(
+            // first message sent immediately
+            messages.Skip(1).Take(_defaultConfig.MaxBatchedItems),
+            (expectedMessage, index) =>
+                Assert.Contains(expectedMessage, batchedText[index])
         );
     }
 
@@ -260,7 +304,7 @@ public class NotificationsServiceTests
     public async Task Send_Should_Send_Multiple_Single_Messages_And_Batched_Message_Combinations_Within_Window()
     {
         _optionsMonitor.CurrentValue.Returns(
-            _defaultConfig with { MaxNonBatchedCalls = 3 }
+            _defaultConfig with { MaxImmediateCalls = 3 }
         );
         var notificationsService = new NotificationsService(
             _optionsMonitor,

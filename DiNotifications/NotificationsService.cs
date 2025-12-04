@@ -30,7 +30,7 @@ public sealed class NotificationsService : INotificationsService
 
         _rxSubscription =
             _rxSubject
-                .Window(_config.Window)
+                .Window(_config.BatchedCallsRetentionPeriod)
                 .SelectMany(window => window.ToList())
                 .Where(list => list.Count > 0)
                 .Subscribe(async list =>
@@ -88,7 +88,7 @@ public sealed class NotificationsService : INotificationsService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if ((now - timestamp).TotalMilliseconds <= _config.Window.TotalMilliseconds)
+            if ((now - timestamp).TotalMilliseconds <= _config.ImmediateCallsThresholdWindow.TotalMilliseconds)
             {
                 break;
             }
@@ -96,7 +96,7 @@ public sealed class NotificationsService : INotificationsService
             _rollingCallsQueue.TryDequeue(out _);
         }
 
-        return _rollingCallsQueue.Count <= _config.MaxNonBatchedCalls;
+        return _rollingCallsQueue.Count <= _config.MaxImmediateCalls;
     }
 
     private async Task BatchSend(
@@ -125,7 +125,22 @@ public sealed class NotificationsService : INotificationsService
             var batchSubject = $"{list.Count} Notifications Received";
             var sb = new StringBuilder();
 
-            foreach (var (timestamp, subject, body) in list)
+            var collection = list.AsEnumerable();
+            var partialProcessing = 
+                _config.MaxBatchedItems > 0 
+                && list.Count >= _config.MaxBatchedItems;
+
+            if (partialProcessing)
+            {
+                collection = list.Take(_config.MaxBatchedItems);
+                _logger.LogWarning(
+                    "Only {MaxBatchedItems} out of {BatchedItemsCount} will be processed.",
+                    _config.MaxBatchedItems,
+                    list.Count
+                );
+            }
+
+            foreach (var (timestamp, subject, body) in collection)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -137,6 +152,18 @@ public sealed class NotificationsService : INotificationsService
                 sb
                     .Append('[').Append(timestamp.ToString("u")).Append("] ").AppendLine(subject)
                     .AppendLine(body);
+            }
+
+            if (partialProcessing)
+            {
+                sb
+                    .AppendLine(_config.BatchedItemsSeparator)
+                    .Append("Note: Only ")
+                        .Append(_config.MaxBatchedItems)
+                        .Append(" out of ")
+                        .Append(list.Count)
+                        .AppendLine(" were processed.")
+                    .AppendLine("Check the logs for more details.");
             }
 
             await _sender.Send(

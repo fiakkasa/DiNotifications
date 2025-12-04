@@ -28,7 +28,11 @@ public class NotificationsConfigTest
     [InlineData(60_000)]
     public void Should_Validate_Successfully_When_Window_Boundaries_Are_Valid(double milliseconds)
     {
-        var cfg = new NotificationsConfig { Window = TimeSpan.FromMilliseconds(milliseconds) };
+        var cfg = new NotificationsConfig 
+        { 
+            ImmediateCallsThresholdWindow = TimeSpan.FromMilliseconds(milliseconds),
+            BatchedCallsRetentionPeriod = TimeSpan.FromMilliseconds(milliseconds)
+        };
         
         var results = Validate(cfg);
 
@@ -40,11 +44,15 @@ public class NotificationsConfigTest
     [InlineData(60_001)]
     public void Should_Not_Validate_Successfully_When_Window_Is_Invalid(double milliseconds)
     {
-        var cfg = new NotificationsConfig { Window = TimeSpan.FromMilliseconds(milliseconds) };
+        var cfg = new NotificationsConfig 
+        { 
+            ImmediateCallsThresholdWindow = TimeSpan.FromMilliseconds(milliseconds), 
+            BatchedCallsRetentionPeriod = TimeSpan.FromMilliseconds(milliseconds) 
+        };
 
         var results = Validate(cfg);
 
-        Assert.Single(results);
+        Assert.Equal(2, results.Count);
         Assert.Equal(
             "The specified period needs to be between 500 and 60000 milliseconds, inclusive.",
             results[0].ErrorMessage

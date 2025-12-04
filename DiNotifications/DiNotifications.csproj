@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>6e6c7445-8dba-4593-9907-c209d77e9f2b</UserSecretsId>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Authors>Adamos Fiakkas</Authors>
     <Description>Di Notifications</Description>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
